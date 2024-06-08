@@ -1,9 +1,11 @@
 import { promises as fs } from "fs";
+import { lstatSync } from 'fs';
 import { ChangeEventPayload, FileList } from "./models";
-import { pureGetEdits } from "./pure-get-edits";
+import { pureGetEdits, windowsToPosix } from "./pure-get-edits";
 import { executeEdits } from "./execute-edits";
 import { ExtensionContext, workspace } from "vscode";
 import { config, getOptions } from "./config";
+import * as path from "path";
 
 function activate(context: ExtensionContext) {
   let payloads: Array<Partial<ChangeEventPayload["save"]>> = [];
@@ -13,28 +15,55 @@ function activate(context: ExtensionContext) {
       (
         await workspace.findFiles("**/*.{md,mdx}", config.exclude.join(","))
       ).map(async (f) => ({
-        path: f.fsPath,
+        path: windowsToPosix(f.fsPath),
         content: await fs.readFile(f.fsPath, "utf-8"),
       }))
     );
   };
 
   const onDidRenameDisposable = workspace.onDidRenameFiles(async (e) => {
-    const payloads: Array<ChangeEventPayload["rename"]> = e.files.map(
-      (file) => ({
-        pathBefore: file.oldUri.fsPath,
-        pathAfter: file.newUri.fsPath,
-      })
-    );
-
+    const payloads = e.files.map((file) => ({
+      pathBefore: windowsToPosix(file.oldUri.fsPath),
+      pathAfter: windowsToPosix(file.newUri.fsPath),
+    }));
+  
     for (const payload of payloads) {
-      const edits = pureGetEdits(
-        { type: "rename", payload },
-        await getMarkdownFiles(),
-        getOptions(payload.pathBefore)
-      );
 
-      await executeEdits(edits);
+      const isDirectory = (filePath: string) => lstatSync(filePath).isDirectory();
+  
+      if (isDirectory(payload.pathAfter)) {
+        
+        const markdownFiles = await getMarkdownFiles();
+        const filesToProcess = markdownFiles.filter(({ path }) => 
+          path.startsWith(payload.pathAfter)
+        );
+  
+        for (const file of filesToProcess) {
+          const relativePath = path.posix.relative(payload.pathAfter, file.path);
+          const originalPathBefore = path.posix.join(payload.pathBefore, relativePath);
+
+          const directoryPayload = {
+            pathBefore: originalPathBefore,
+            pathAfter: file.path,
+          };
+          
+          const edits = pureGetEdits(
+            { type: "rename", payload: directoryPayload },
+            markdownFiles,
+            getOptions(directoryPayload.pathBefore)
+          );
+  
+          await executeEdits(edits);
+        }
+      } else {  
+        const edits = pureGetEdits(
+          { type: "rename", payload },
+          await getMarkdownFiles(),
+          getOptions(payload.pathBefore)
+        );
+  
+        await executeEdits(edits);
+      }
     }
   });
 
