@@ -323,4 +323,4 @@ const windowsToPosix = (path: string) => {
   return path.replace(/\\/g, "/");
 };
 
-export { pureGetEdits, Options };
+export { pureGetEdits, Options, windowsToPosix };
